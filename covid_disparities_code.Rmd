@@ -1,0 +1,139 @@
+---
+title: "covid_disparities_code"
+author: "Nick Pantaleo"
+date: "7/6/2020"
+output: html_document
+---
+
+```{r libraries}
+library(tidyverse)
+library(readxl)
+library(janitor)
+library(lme4)
+library(lmerTest)
+```
+
+Load and set-up data
+
+```{r load data}
+poverty_income <- read_csv("Data/poverty_county/poverty_income_tidy.csv") %>% 
+  select(fips, median_income)
+
+dat <- read_csv("Data/covid_dat_may10.csv") %>% 
+  rename(csa = metro) %>% 
+  select(everything(), -c(percent_nw_quint, percent_poverty_quint)) %>% 
+  mutate(poverty_cat = case_when(
+    poverty_percent < 5 ~ 1,
+    poverty_percent >= 5 & poverty_percent < 10 ~ 2,
+    poverty_percent >= 10 & poverty_percent < 15 ~ 3,
+    poverty_percent >= 15 ~ 4
+  )) %>% 
+  mutate(poverty_cat = as.factor(poverty_cat),
+         poverty_bin = as.factor(if_else(
+           poverty_percent <= median(poverty_percent), 1, 2
+         ))) %>% 
+  left_join(poverty_income, by = "fips")
+
+nw_quarts <- dat$percent_nw %>% 
+  quantile(probs = seq(0, 1, 0.25)) %>% 
+  unname()
+
+dat <- dat %>% 
+  mutate(nw_quart = case_when(
+    percent_nw < nw_quarts[2] ~ 1,
+    percent_nw >= nw_quarts[2] & percent_nw < nw_quarts[3] ~ 2,
+    percent_nw >= nw_quarts[3] & percent_nw < nw_quarts[4] ~ 3,
+    percent_nw >= nw_quarts[4] & percent_nw <= nw_quarts[5] ~ 4
+  )) %>% 
+  mutate(nw_quart = as.factor(nw_quart))
+```
+
+Table 1: Summary of County Level Poverty, Income, Race, and COVID-19 Infections (cumulative incidence) and Deaths (cumulative deaths) per 100,000 by CSA
+
+```{r table 1}
+dat %>% 
+  mutate(
+    "CSA" = case_when(
+      csa == "NYC" ~ "New York City (36)",
+      csa == "Mia" ~ "Miami (6)",
+      csa == "Chi" ~ "Chicago (17)",
+      csa == "Bos" ~ "Boston (19)",
+      csa == "Phl" ~ "Philadelphia (18)",
+      csa == "Det" ~ "Detroit (10)",
+      csa == "Atl" ~ "Atlanta (28)",
+      csa == "LA" ~ "Los Angeles (5)",
+      csa == "Sea" ~ "Seattle (8)",
+      csa == "NOr" ~ "New Orleans (11)")) %>% 
+  mutate(poverty_bin = if_else(poverty_bin == 1, 0, 1)) %>% 
+  group_by(CSA) %>% 
+  summarize("Percent below poverty, median (range)" = 
+              paste0(format(round(median(poverty_percent), 1), nsmall = 1),
+                     " (",
+                     format(round(min(poverty_percent), 1), nsmall = 1),
+                     ", ",
+                     format(round(max(poverty_percent), 1), nsmall = 1),
+                     ")"),
+            "Median county-level income, median (range)" =
+              paste0("$",
+                     formatC(round(median(median_income), 0), big.mark = ",", mode = "integer"),
+                     " (",
+                     formatC(round(min(median_income), 0), big.mark = ",", mode = "integer"),
+                     ", ",
+                     formatC(round(max(median_income), 0), big.mark = ",", mode = "integer"),
+                     ")"),
+            "Percent non-white, median (range)" =
+              paste0(format(round(median(percent_nw), 1), nsmall = 1),
+                     " (",
+                     format(round(min(percent_nw), 1), nsmall = 1),
+                     ", ",
+                     format(round(max(percent_nw), 1), nsmall = 1),
+                     ")"),
+            "COVID-19 cases per 100,000, median (range)" =
+              paste0(format(round(median(case_rate), 1), nsmall = 1),
+                     " (",
+                     format(round(min(case_rate), 1), nsmall = 1),
+                     ", ",
+                     format(round(max(case_rate), 1), nsmall = 1),
+                     ")"),
+            "COVID-19 deaths per 100,000, median (range)" =
+              paste0(format(round(median(death_rate), 1), nsmall = 1),
+                     " (",
+                     format(round(min(death_rate), 1), nsmall = 1),
+                     ", ",
+                     format(round(max(death_rate), 1), nsmall = 1),
+                     ")")) %>% 
+  rename("CSA (counties)" = CSA) %>% 
+  kable(format.args = list(big.mark = ",")) %>% 
+  kable_styling()
+```
+
+Fit models
+
+```{r models}
+case_pov_bin_yes_int <- lmer(log(case_rate) ~
+                               poverty_bin + 
+                               nw_quart +
+                               poverty_bin * nw_quart +
+                               (1 | csa),
+                             data = dat)
+
+death_pov_bin_yes_int <- lmer(log(death_rate) ~
+                                poverty_bin + 
+                                nw_quart + 
+                                poverty_bin * nw_quart +
+                                (1 | csa),
+                              data = dat)
+
+tab_model(case_pov_bin_yes_int, death_pov_bin_yes_int,
+          pred.labels = c("(Intercept)",
+                          "Higher poverty",
+                          "Less diverse",
+                          "More diverse",
+                          "Substantially non-white",
+                          "Higher poverty * less diverse",
+                          "Higher poverty * more diverse",
+                          "Higher poverty * substantially non-white"),
+          dv.labels = c("Infection Rate", "Death Rate"),
+          transform = "exp")
+```
+
