@@ -7,10 +7,9 @@ output: html_document
 
 ```{r libraries}
 library(tidyverse)
-library(readxl)
-library(janitor)
+library(kableExtra)
 library(lme4)
-library(lmerTest)
+library(sjPlot)
 ```
 
 Load and set-up data
